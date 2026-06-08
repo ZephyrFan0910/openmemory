@@ -1,0 +1,22 @@
+{
+  "name": "openmemory",
+  "version": "0.1.0",
+  "description": "OpenMemory - 本地记忆树系统，移植自 OpenHuman",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "openmemory": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "cli": "node src/cli.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": ["memory", "knowledge-tree", "mcp"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "commander": "^15.0.0"
+  }
+}

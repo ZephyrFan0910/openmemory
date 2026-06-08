@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node src/cli.js search \"记忆树\")",
+      "Bash(node src/cli.js import browser --browsers chrome)",
+      "Bash(node src/cli.js search \"github\" --limit 5)",
+      "Bash(node src/cli.js ingest)",
+      "Bash(node src/cli.js tree --build)",
+      "Bash(node src/cli.js tree --level 1)",
+      "Bash(node src/cli.js tree --kind source --level 1)",
+      "Bash(node -e ' *)",
+      "Bash(node src/cli.js tree --build --level 1)",
+      "Bash(node src/cli.js search \"github\" --limit 3)",
+      "Bash(node src/server.js)",
+      "Bash(node -e \"process.stdin.on\\('data',d=>console.log\\(JSON.stringify\\(JSON.parse\\(d\\).result.tools.map\\(t=>t.name\\)\\)\\)\\)\")",
+      "Bash(node src/cli.js reset -y)",
+      "Bash(node src/cli.js import browser -s 2026-06-01)",
+      "Bash(node src/cli.js import browser)",
+      "Bash(node src/cli.js search \"github\" -l 3)",
+      "Bash(node src/cli.js vault -l 10)",
+      "Bash(node src/cli.js search \"github\" -l 2)",
+      "Bash(node src/cli.js vault -l 5)",
+      "Bash(node src/cli.js --help)",
+      "Bash(node src/cli.js import --help)",
+      "Bash(node src/cli.js vault -l 20)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
