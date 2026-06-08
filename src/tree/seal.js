@@ -11,9 +11,9 @@ import { getChunk, estimateTokenCount } from '../store/chunks.js';
 import { getTreeNode } from '../store/trees.js';
 import { summarise } from './summarise.js';
 import { extractEntities } from '../extract/composite.js';
-import { insertEntity, indexEntityForChunk } from '../store/entities.js';
+import { insertEntity, indexEntityForChunk, getChunksForEntity } from '../store/entities.js';
 import { embedText } from '../embed/index.js';
-import { writeTreeNodeToVault } from '../store/content.js';
+import { writeTreeNodeToVault, writeEntityToVault } from '../store/content.js';
 import { shouldSeal, SUMMARY_FANOUT, MAX_CASCADE_DEPTH } from './buffer.js';
 
 /**
@@ -129,7 +129,8 @@ export async function sealBuffer(db, treeId, level, treeKind = 'global') {
   // 7. 关联子节点
   linkChildren(db, nodeId, childNodeIds);
 
-  // 8. 索引实体
+  // 8. 索引实体 + 写实体页面
+  const dbEntities = [];
   for (const entity of entities) {
     const dbEntity = insertEntity(db, {
       name: entity.name,
@@ -138,11 +139,40 @@ export async function sealBuffer(db, treeId, level, treeKind = 'global') {
     });
     if (dbEntity) {
       indexEntityForChunk(db, dbEntity.id, nodeId);
+      dbEntities.push(dbEntity);
     }
   }
 
-  // 9. 写入 vault
-  writeTreeNodeToVault({ id: nodeId, level: level + 1, content: summaryContent, score: maxScore, timeFrom, timeTo, treeKind });
+  // 9. 写入 vault（带子节点链接 + 实体链接）
+  const childInfo = children.map(c => ({
+    id: c.id,
+    level: c.level || 0,
+    title: c.title || c.source || '',
+  }));
+
+  writeTreeNodeToVault(
+    { id: nodeId, level: level + 1, content: summaryContent, score: maxScore, timeFrom, timeTo, treeKind },
+    childInfo,
+    null, // parentId（L4 根节点没有父节点）
+    dbEntities.map(e => ({ name: e.name, type: e.type, canonical_id: e.canonical_id })),
+  );
+
+  // 10. 更新实体页面
+  for (const entity of dbEntities) {
+    const mentions = getChunksForEntity(db, entity.id);
+    // 查询所有引用该实体的节点信息
+    const mentionInfos = [];
+    for (const mid of mentions) {
+      const node = getTreeNode(db, mid);
+      if (node) {
+        mentionInfos.push({ id: mid, level: node.level, date: node.time_from });
+      }
+    }
+    writeEntityToVault(
+      { canonical_id: entity.canonical_id, name: entity.name, type: entity.type },
+      mentionInfos,
+    );
+  }
 
   // 10. 清空当前缓冲区
   clearBuffer(db, treeId, level);

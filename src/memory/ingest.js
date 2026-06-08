@@ -78,10 +78,11 @@ export async function ingest(db, entries) {
 
       const inserted = insertChunks(db, dbChunks);
 
-      // 5. 索引实体
+      // 5. 索引实体 + 写入 vault
       for (let i = 0; i < inserted.length; i++) {
         const dbChunk = inserted[i];
         const origChunk = kept[i];
+        const chunkEntities = [];
 
         if (origChunk.entities && origChunk.entities.length > 0) {
           for (const entity of origChunk.entities) {
@@ -96,13 +97,14 @@ export async function ingest(db, entries) {
             // 建立索引
             if (dbEntity) {
               indexEntityForChunk(db, dbEntity.id, dbChunk.id);
+              chunkEntities.push({ name: entity.name, type: entity.type, canonical_id: entity.canonical_id });
               results.entities++;
             }
           }
         }
 
-        // 写入 vault
-        writeChunkToVault(dbChunk);
+        // 写入 vault（带实体 wikilinks）
+        writeChunkToVault(dbChunk, chunkEntities);
 
         results.chunks.push(dbChunk);
       }

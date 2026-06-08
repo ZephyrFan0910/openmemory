@@ -402,7 +402,80 @@ program
   .command('vault')
   .description('查看 vault 文件列表')
   .option('-l, --limit <n>', '显示条数', '20')
+  .option('--index', '生成 Index MOC 总览页')
+  .option('--rebuild', '从数据库重建所有 vault 文件（带 wikilinks）')
   .action(async (options) => {
+    const db = getDb();
+    try {
+      // --index: 生成 Index MOC
+      if (options.index) {
+        const { writeIndexMOC } = await import('./store/content.js');
+        writeIndexMOC(db);
+        console.log('✅ 已生成 Index.md');
+        return;
+      }
+
+      // --rebuild: 从数据库重建所有 vault 文件
+      if (options.rebuild) {
+        const { writeTreeNodeToVault, writeChunkToVault, writeEntityToVault, writeIndexMOC } = await import('./store/content.js');
+        const { getTreeNode, getChildNodes } = await import('./store/trees.js');
+        const { getChunk } = await import('./store/chunks.js');
+        const { getEntitiesForChunk, getTopEntities } = await import('./store/entities.js');
+
+        // 清空 vault
+        const vaultPath = path.join(process.cwd(), 'data', 'vault');
+        if (fs.existsSync(vaultPath)) {
+          fs.rmSync(vaultPath, { recursive: true, force: true });
+        }
+
+        console.log('🔄 从数据库重建 vault...');
+
+        // 重建 chunks
+        const chunks = db.prepare('SELECT * FROM chunks').all();
+        for (const chunk of chunks) {
+          const entities = getEntitiesForChunk(db, chunk.id);
+          writeChunkToVault(chunk, entities.map(e => ({ name: e.name, type: e.type, canonical_id: e.canonical_id })));
+        }
+        console.log(`   写入 ${chunks.length} 个 chunk 文件`);
+
+        // 重建 tree nodes
+        const nodes = db.prepare('SELECT * FROM tree_nodes ORDER BY level').all();
+        for (const node of nodes) {
+          const children = getChildNodes(db, node.id);
+          const entities = getEntitiesForChunk(db, node.id);
+          const childInfo = children.map(c => ({ id: c.id, level: c.level, title: c.content?.slice(0, 50) || '' }));
+          writeTreeNodeToVault(
+            { id: node.id, level: node.level, content: node.content, score: node.score, timeFrom: node.time_from, timeTo: node.time_to, treeKind: node.tree_kind },
+            childInfo,
+            node.parent_id,
+            entities.map(e => ({ name: e.name, type: e.type, canonical_id: e.canonical_id })),
+          );
+        }
+        console.log(`   写入 ${nodes.length} 个 summary 文件`);
+
+        // 重建实体页面
+        const allEntities = getTopEntities(db, { limit: 1000 });
+        for (const entity of allEntities) {
+          const mentionIds = db.prepare('SELECT chunk_id FROM entity_index WHERE entity_id = ?').all(entity.id);
+          const mentions = mentionIds.map(m => {
+            const n = getTreeNode(db, m.chunk_id);
+            return n ? { id: m.chunk_id, level: n.level, date: n.time_from } : null;
+          }).filter(Boolean);
+          writeEntityToVault({ canonical_id: entity.canonical_id, name: entity.name, type: entity.type }, mentions);
+        }
+        console.log(`   写入 ${allEntities.length} 个实体页面`);
+
+        // 生成 Index
+        writeIndexMOC(db);
+        console.log('   生成 Index.md');
+
+        console.log('✅ Vault 重建完成');
+        return;
+      }
+    } finally {
+      closeDb();
+    }
+
     const vaultPath = path.join(process.cwd(), 'data', 'vault');
     if (!fs.existsSync(vaultPath)) {
       console.log('vault 目录不存在，请先导入数据');
