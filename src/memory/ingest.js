@@ -6,7 +6,7 @@
 import crypto from 'crypto';
 import { insertChunks, updateChunkScore, updateChunkLifecycle, estimateTokenCount } from '../store/chunks.js';
 import { insertEntities, indexEntityForChunk, getEntityByName } from '../store/entities.js';
-import { scoreChunk, DROP_THRESHOLD } from '../tree/score.js';
+import { scoreChunk, DROP_THRESHOLD, DEFINITE_KEEP } from '../tree/score.js';
 import { extractEntities } from '../extract/composite.js';
 import { desensitizeText } from '../desensitize/index.js';
 import { writeChunkToVault } from '../store/content.js';
@@ -42,22 +42,24 @@ export async function ingest(db, entries) {
 
     // 2. 评分 + 实体抽取
     for (const chunk of chunks) {
-      // 评分
+      // 实体抽取
+      const { entities, topics } = await extractEntities(chunk.content);
+      chunk.entities = entities;
+      chunk.topics = topics;
+      chunk._entityCount = entities.length;
+
+      // 评分（使用 3 级门控）
       const scoreResult = scoreChunk(chunk);
       chunk.score = scoreResult.total;
       chunk.scoreSignals = scoreResult.signals;
-
-      // 实体抽取
-      const { entities, topics } = extractEntities(chunk.content);
-      chunk.entities = entities;
-      chunk.topics = topics;
+      chunk.gate = scoreResult.gate;
 
       results.scored++;
     }
 
-    // 3. 过滤
-    const kept = chunks.filter(c => c.score >= INGEST_CONFIG.dropThreshold);
-    const dropped = chunks.filter(c => c.score < INGEST_CONFIG.dropThreshold);
+    // 3. 过滤：使用 gate 决定保留/丢弃
+    const kept = chunks.filter(c => c.gate === 'keep' || c.gate === 'borderline');
+    const dropped = chunks.filter(c => c.gate === 'drop');
 
     results.kept += kept.length;
     results.dropped += dropped.length;
@@ -88,6 +90,7 @@ export async function ingest(db, entries) {
               name: entity.name,
               type: entity.type,
               sourceChunkId: dbChunk.id,
+              canonicalId: entity.canonical_id,
             });
 
             // 建立索引

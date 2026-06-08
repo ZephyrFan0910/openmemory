@@ -5,7 +5,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import { initSchema } from './schema.js';
+import { initSchema, migrateSchema } from './schema.js';
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'memory.db');
 
@@ -31,8 +31,9 @@ export function getDb(dbPath = DEFAULT_DB_PATH) {
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
 
-  // 初始化 schema
+  // 初始化 schema + 迁移
   initSchema(_db);
+  migrateSchema(_db);
 
   return _db;
 }

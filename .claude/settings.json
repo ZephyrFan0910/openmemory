@@ -24,7 +24,29 @@
       "Bash(node src/cli.js import --help)",
       "Bash(node src/cli.js vault -l 20)",
       "Bash(git init *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(gh auth *)",
+      "Bash(git config *)",
+      "Bash(git commit -m 'feat: OpenMemory v0.1.0 - 本地记忆树系统 *)",
+      "Bash(git rm *)",
+      "Bash(git commit *)",
+      "Bash(git remote *)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "Bash(where.exe gh *)",
+      "Bash(where.exe git *)",
+      "Bash(git ls-remote *)",
+      "Bash(git clone *)",
+      "Bash(dir \"C:\\\\temp\\\\openhuman\\\\src\")",
+      "Bash(dir \"C:\\\\temp\\\\openhuman\")",
+      "Bash(ls /c/temp/openhuman/ 2>&1)",
+      "Read(//c/temp/**)",
+      "Bash(find / -maxdepth 4 -name \"openhuman\" -type d 2>/dev/null | head -10)",
+      "Read(//d//**)",
+      "Bash(git -C \"C:/temp/openhuman\" log --oneline -1)",
+      "Read(//c//**)"
     ]
   }
 }

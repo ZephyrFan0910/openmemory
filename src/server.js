@@ -84,6 +84,35 @@ export class OpenMemoryServer {
         },
         handler: this.handleAddMemory.bind(this),
       },
+
+      query_source: {
+        description: '按来源查询记忆（支持时间窗口和语义重排）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '搜索关键词（可选）' },
+            source_kind: { type: 'string', enum: ['wechat', 'browser', 'video', 'session', 'file', 'all'], default: 'all', description: '来源类型' },
+            time_window_days: { type: 'integer', description: '时间窗口（天）' },
+            limit: { type: 'integer', default: 10, description: '返回条数' },
+            rerank: { type: 'boolean', default: false, description: '是否启用语义重排' },
+          },
+        },
+        handler: this.handleQuerySource.bind(this),
+      },
+
+      search_entities: {
+        description: '模糊搜索实体（人名/地名/项目名等）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '搜索关键词' },
+            kinds: { type: 'array', items: { type: 'string' }, description: '实体类型过滤' },
+            limit: { type: 'integer', default: 10, description: '返回条数' },
+          },
+          required: ['query'],
+        },
+        handler: this.handleSearchEntities.bind(this),
+      },
     };
   }
 
@@ -162,49 +191,15 @@ export class OpenMemoryServer {
   /**
    * 处理 drill_down 请求
    */
-  async handleDrillDown({ node_id }) {
-    const node = getTreeNode(this.db, node_id);
-
-    if (!node) {
-      return { error: `节点 ${node_id} 不存在` };
-    }
-
-    const children = getChildNodes(this.db, node_id);
-
-    // 如果是叶子节点，返回关联的 chunk 内容
-    if (node.level === 0 && node.chunk_id) {
-      const chunk = getChunk(this.db, node.chunk_id);
-      return {
-        node: {
-          id: node.id,
-          level: node.level,
-          score: node.score,
-          content: chunk?.content || node.content,
-          entities: getEntitiesForChunk(this.db, node_id).map(e => ({ name: e.name, type: e.type })),
-        },
-        children: [],
-      };
-    }
-
-    return {
-      node: {
-        id: node.id,
-        level: node.level,
-        score: node.score,
-        content: node.content,
-        time_from: node.time_from,
-        time_to: node.time_to,
-        entities: getEntitiesForChunk(this.db, node_id).map(e => ({ name: e.name, type: e.type })),
-      },
-      children: children.map(child => ({
-        id: child.id,
-        level: child.level,
-        score: child.score,
-        content: child.content?.slice(0, 100) + (child.content?.length > 100 ? '...' : ''),
-        time_from: child.time_from,
-        time_to: child.time_to,
-      })),
-    };
+  async handleDrillDown({ node_id, query, max_depth = 1, limit = 10, rerank = false }) {
+    const { drillDown } = await import('./retrieval/query.js');
+    return drillDown(this.db, {
+      nodeId: node_id,
+      query,
+      maxDepth: max_depth,
+      limit,
+      rerank,
+    });
   }
 
   /**
@@ -231,7 +226,7 @@ export class OpenMemoryServer {
     });
 
     // 实体抽取
-    const { entities } = extractEntities(cleanContent);
+    const { entities } = await extractEntities(cleanContent);
     for (const entity of entities) {
       const dbEntity = insertEntity(this.db, {
         name: entity.name,
@@ -249,6 +244,28 @@ export class OpenMemoryServer {
       title: cleanTitle || '手动添加的记忆',
       entities_count: entities.length,
     };
+  }
+
+  /**
+   * 处理 query_source 请求
+   */
+  async handleQuerySource({ query, source_kind = 'all', time_window_days, limit = 10, rerank = false }) {
+    const { querySource } = await import('./retrieval/query.js');
+    return querySource(this.db, {
+      query,
+      sourceKind: source_kind,
+      timeWindowDays: time_window_days,
+      limit,
+      rerank,
+    });
+  }
+
+  /**
+   * 处理 search_entities 请求
+   */
+  async handleSearchEntities({ query, kinds, limit = 10 }) {
+    const { searchEntitiesFuzzy } = await import('./retrieval/query.js');
+    return searchEntitiesFuzzy(this.db, { query, kinds, limit });
   }
 
   /**

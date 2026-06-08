@@ -17,6 +17,7 @@ export function generateNodeId() {
  */
 export function insertTreeNode(db, {
   id,
+  treeId = null,
   treeKind,
   level,
   parentId = null,
@@ -27,15 +28,16 @@ export function insertTreeNode(db, {
   timeFrom = null,
   timeTo = null,
   tokenCount = 0,
+  embedding = null,
 }) {
   const nodeId = id || generateNodeId();
 
   db.prepare(`
-    INSERT OR IGNORE INTO tree_nodes (id, tree_kind, level, parent_id, chunk_id, content, summary_md, score, time_from, time_to, token_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(nodeId, treeKind, level, parentId, chunkId, content, summaryMd, score, timeFrom, timeTo, tokenCount);
+    INSERT OR IGNORE INTO tree_nodes (id, tree_id, tree_kind, level, parent_id, chunk_id, content, summary_md, score, time_from, time_to, token_count, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(nodeId, treeId, treeKind, level, parentId, chunkId, content, summaryMd, score, timeFrom, timeTo, tokenCount, embedding);
 
-  return { id: nodeId, treeKind, level, parentId, chunkId, content, summaryMd, score, timeFrom, timeTo, tokenCount };
+  return { id: nodeId, treeId, treeKind, level, parentId, chunkId, content, summaryMd, score, timeFrom, timeTo, tokenCount };
 }
 
 /**
@@ -181,4 +183,57 @@ export function getTreeStructure(db, nodeId, maxDepth = 10) {
   }
 
   return node;
+}
+
+// ==================== Tree 管理函数 ====================
+
+/**
+ * 创建一棵树
+ */
+export function createTree(db, { id, kind, scope = null }) {
+  db.prepare(`
+    INSERT OR IGNORE INTO trees (id, kind, scope, status)
+    VALUES (?, ?, ?, 'active')
+  `).run(id, kind, scope);
+  return getTreeById(db, id);
+}
+
+/**
+ * 获取树信息
+ */
+export function getTreeById(db, id) {
+  return db.prepare('SELECT * FROM trees WHERE id = ?').get(id);
+}
+
+/**
+ * 按类型获取所有活跃的树
+ */
+export function getTreesByKind(db, kind) {
+  return db.prepare("SELECT * FROM trees WHERE kind = ? AND status = 'active'").all(kind);
+}
+
+/**
+ * 更新树的最大层级
+ */
+export function updateTreeMaxLevel(db, treeId, level) {
+  db.prepare('UPDATE trees SET max_level = MAX(max_level, ?) WHERE id = ?')
+    .run(level, treeId);
+}
+
+/**
+ * 更新树的最后密封时间
+ */
+export function updateTreeLastSealedAt(db, treeId) {
+  db.prepare("UPDATE trees SET last_sealed_at = datetime('now') WHERE id = ?")
+    .run(treeId);
+}
+
+/**
+ * 获取或创建默认树
+ */
+export function ensureTree(db, kind = 'global') {
+  const id = `tree_${kind}_default`;
+  const existing = getTreeById(db, id);
+  if (existing) return existing;
+  return createTree(db, { id, kind, scope: kind });
 }

@@ -8,12 +8,16 @@
 
 - **5 种数据源**：本地文档、浏览器历史、微信聊天、视频观看、Agent 会话
 - **自动脱敏**：手机号/身份证/邮箱/密码/敏感 URL 自动过滤
-- **评分系统**：5 信号加权评分，自动过滤低价值内容
+- **7 信号评分**：token_count、unique_words、metadata、source、interaction、entity_density、llm_importance
+- **3 级准入门控**：definite_keep (≥0.85) / borderline / definite_drop (≤0.15)
+- **流式 Buffer+Seal**：增量式树构建，L0→L1→L2→... 自动级联密封
+- **实体抽取**：正则 + 关键词 + LLM 三重抽取，canonical_id 规范化去重
+- **向量嵌入**：支持 Ollama (bge-m3) 和 OpenAI 兼容 API，余弦相似度重排
 - **记忆树**：多级摘要树，从叶子节点递归生成摘要
 - **全文搜索**：SQLite FTS5 全文索引
-- **实体抽取**：自动提取关键词、URL、@handle、#hashtag
+- **语义重排**：基于嵌入向量的余弦相似度重排
 - **Obsidian 兼容**：输出 .md 文件到 vault 目录，带 YAML frontmatter
-- **MCP Server**：暴露 4 个 Tools 供 AI Agent 调用
+- **MCP Server**：暴露 6 个 Tools 供 AI Agent 调用
 
 ## 安装
 
@@ -96,14 +100,16 @@ openmemory reset -y                   # 清空所有数据
 
 ## MCP Server
 
-启动后可通过 MCP 协议调用 4 个 Tools：
+启动后可通过 MCP 协议调用 6 个 Tools：
 
 | Tool | 说明 |
 |------|------|
 | `search_memory` | 全文搜索记忆 |
 | `get_memory_tree` | 获取记忆树摘要视图 |
-| `drill_down` | 深入查看节点详情 |
+| `drill_down` | 深入查看节点详情（支持 BFS + 语义重排） |
 | `add_memory` | 手动添加记忆 |
+| `query_source` | 按来源查询（支持时间窗口 + 语义重排） |
+| `search_entities` | 模糊搜索实体（canonical_id + surface） |
 
 ```bash
 # 启动
@@ -123,20 +129,33 @@ src/
 ├── memory/
 │   └── ingest.js           # 摄入管线：切块 + 评分 + 持久化
 ├── tree/
-│   ├── score.js            # 评分系统（5 信号加权）
-│   ├── build.js            # 批量构建树
-│   └── summarise.js        # 摘要生成（LLM + 规则）
+│   ├── score.js            # 评分系统（7 信号 + 3 级门控）
+│   ├── build.js            # 流式树构建（Buffer + Seal）
+│   ├── buffer.js           # 缓冲区逻辑 + shouldSeal
+│   ├── seal.js             # 密封逻辑 + 级联
+│   └── summarise.js        # 摘要生成（LLM + fallback）
 ├── store/
-│   ├── db.js               # SQLite 连接
+│   ├── db.js               # SQLite 连接 + 迁移
 │   ├── schema.js           # DDL 建表
 │   ├── chunks.js           # chunks 表 CRUD
-│   ├── trees.js            # tree_nodes 表 CRUD
+│   ├── trees.js            # tree_nodes + trees 表 CRUD
+│   ├── buffers.js          # buffers 表 CRUD
 │   ├── entities.js         # entities 表 CRUD
 │   └── content.js          # vault .md 文件读写
 ├── extract/
-│   ├── regex.js            # 正则抽取
+│   ├── regex.js            # 正则抽取（5 类模式）
 │   ├── keywords.js         # 关键词抽取
-│   └── composite.js        # 组合抽取器
+│   ├── canonical.js        # 实体规范化 ID
+│   ├── llm.js              # LLM 实体抽取 + importance
+│   └── composite.js        # 组合抽取器（async）
+├── embed/
+│   ├── index.js            # 嵌入层入口
+│   ├── ollama.js           # Ollama provider
+│   ├── openai.js           # OpenAI 兼容 provider
+│   └── similarity.js       # 余弦相似度
+├── retrieval/
+│   ├── query.js            # 检索查询（querySource, drillDown）
+│   └── rerank.js           # 语义重排
 ├── collectors/
 │   ├── index.js            # 采集器基类
 │   ├── files.js            # 本地文档
@@ -149,7 +168,8 @@ src/
 │   ├── filters.js          # URL 过滤
 │   └── index.js            # 脱敏入口
 └── utils/
-    └── logger.js           # 日志工具
+    ├── logger.js           # 日志工具
+    └── tokens.js           # Token 预算工具
 ```
 
 ## 数据模型
@@ -165,30 +185,31 @@ src/
 
 ## 配置
 
-在 `src/tree/score.js` 中可调整评分权重：
+在 `src/tree/score.js` 中可调整评分权重（对齐 OpenHuman）：
 
 ```javascript
 export const SCORE_WEIGHTS = {
-  tokenCount: 0.15,      // token 数量
-  uniqueWords: 0.15,     // 唯一词比例
-  metadataWeight: 0.2,   // 元数据（标题/结构）
-  sourceWeight: 0.2,     // 来源权重
-  entityDensity: 0.3,    // 实体密度
+  tokenCount: 1.0,
+  uniqueWords: 1.0,
+  metadataWeight: 1.5,
+  sourceWeight: 1.5,
+  interaction: 3.0,       // 最强信号
+  entityDensity: 1.0,
+  llmImportance: 0.0,     // 默认关闭，启用时为 2.0
 };
 ```
 
-在 `src/tree/build.js` 中可调整树构建参数：
+在 `src/tree/buffer.js` 中可调整密封参数：
 
 ```javascript
-const BUILD_CONFIG = {
-  summaryFanout: 10,   // 每层最多子节点数
-  maxTreeDepth: 10,     // 最大树深度
-};
+export const INPUT_TOKEN_BUDGET = 50_000;   // L0 密封：token 门槛
+export const SUMMARY_FANOUT = 10;            // L1+ 密封：兄弟节点数门槛
+export const FLUSH_AGE_DAYS = 7;             // 时间冲洗：7 天
 ```
 
 ## LLM 摘要
 
-设置环境变量启用 LLM 摘要（否则使用规则摘要）：
+设置环境变量启用 LLM 摘要（否则使用 fallback 摘要）：
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -196,6 +217,21 @@ export OPENAI_API_KEY=sk-...
 export LLM_API_KEY=sk-...
 export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_MODEL=gpt-4o-mini
+```
+
+## 向量嵌入
+
+设置环境变量启用语义搜索和重排：
+
+```bash
+# Ollama（本地，推荐）
+export OLLAMA_URL=http://localhost:11434
+export OLLAMA_EMBED_MODEL=bge-m3
+
+# 或 OpenAI 兼容 API
+export EMBEDDING_API_KEY=sk-...
+export EMBEDDING_BASE_URL=https://api.openai.com/v1
+export EMBEDDING_MODEL=text-embedding-3-small
 ```
 
 ## License

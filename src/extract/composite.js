@@ -1,42 +1,79 @@
 /**
  * OpenMemory - 组合抽取器
- * 合并正则抽取和关键词抽取的结果
+ * 移植自 OpenHuman 的 CompositeExtractor
+ *
+ * 链式合并：regex → keywords → LLM
+ * 所有实体添加 canonical_id
  */
 
 import { extractRegex } from './regex.js';
 import { extractKeywords } from './keywords.js';
+import { extractLlmEntities } from './llm.js';
+import { canonicalIdFor } from './canonical.js';
 
 /**
- * 组合抽取：正则 + 关键词
+ * 组合抽取（async，支持可选 LLM）
  * @param {string} text
  * @param {Object} options
- * @returns {{ entities: Array<{ name: string, type: string }>, topics: string[] }}
+ * @param {boolean} options.useLlm - 是否使用 LLM（默认 true，无 API key 自动跳过）
+ * @param {number} options.topN - 关键词数量
+ * @returns {Promise<{ entities: Array, topics: string[], llmImportance: number }>}
  */
-export function extractEntities(text, options = {}) {
-  const { topN = 10 } = options;
+export async function extractEntities(text, options = {}) {
+  const { useLlm = true, topN = 10 } = options;
 
-  if (!text) return { entities: [], topics: [] };
+  if (!text) return { entities: [], topics: [], llmImportance: 0 };
 
-  // 正则抽取：邮箱、URL、@handle、#hashtag
+  // 1. 正则抽取
   const regexEntities = extractRegex(text);
 
-  // 关键词抽取：topic
+  // 2. 关键词抽取
   const keywordEntities = extractKeywords(text, topN);
 
-  // 合并去重
-  const seen = new Set();
-  const entities = [];
+  // 3. LLM 抽取（可选）
+  let llmEntities = [];
+  let llmTopics = [];
+  let llmImportance = 0;
 
-  for (const entity of [...regexEntities, ...keywordEntities]) {
-    const key = `${entity.type}:${entity.name}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      entities.push(entity);
+  if (useLlm) {
+    try {
+      const llmResult = await extractLlmEntities(text, {
+        emitTopics: true,
+      });
+      llmEntities = llmResult.entities;
+      llmTopics = llmResult.topics;
+      llmImportance = llmResult.importance;
+    } catch {
+      // LLM 失败不影响整体
     }
   }
 
-  // 提取 topic 列表
-  const topics = keywordEntities.map(e => e.name);
+  // 4. 合并去重（使用 canonical_id）
+  const seen = new Set();
+  const entities = [];
 
-  return { entities, topics };
+  const addEntity = (entity) => {
+    const cid = canonicalIdFor(entity.type, entity.name);
+    if (!cid) return;
+    if (seen.has(cid)) return;
+    seen.add(cid);
+    entities.push({ ...entity, canonical_id: cid });
+  };
+
+  for (const entity of regexEntities) addEntity(entity);
+  for (const entity of keywordEntities) addEntity({ name: entity.name, type: 'topic' });
+  for (const entity of llmEntities) addEntity(entity);
+
+  // 5. 合并 topics
+  const allTopics = [
+    ...keywordEntities.map(e => e.name),
+    ...llmTopics,
+  ];
+  const uniqueTopics = [...new Set(allTopics.map(t => t.toLowerCase()))];
+
+  return {
+    entities,
+    topics: uniqueTopics,
+    llmImportance,
+  };
 }

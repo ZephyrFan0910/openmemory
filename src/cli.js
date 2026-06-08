@@ -51,16 +51,24 @@ async function postImport(db, result, options) {
   if (!options.ingest || result.entries.length === 0) return;
 
   console.log('\n📝 评分中...');
-  let scored = 0, entities = 0;
+  let scored = 0, kept = 0, dropped = 0, entities = 0;
 
   for (const entry of result.entries) {
-    // 评分
+    // 实体抽取
+    const { entities: ents } = await extractEntities(entry.content);
+    entry._entityCount = ents.length;
+
+    // 评分（3 级门控）
     const scoreResult = scoreChunk(entry);
     updateChunkScore(db, entry.id, scoreResult.total, 'scored');
     scored++;
 
-    // 实体抽取
-    const { entities: ents } = extractEntities(entry.content);
+    if (scoreResult.gate === 'drop') {
+      dropped++;
+    } else {
+      kept++;
+    }
+
     for (const entity of ents) {
       const dbEntity = insertEntity(db, {
         name: entity.name,
@@ -74,7 +82,7 @@ async function postImport(db, result, options) {
     }
   }
 
-  console.log(`   评分 ${scored} 条，抽取 ${entities} 个实体`);
+  console.log(`   评分 ${scored} 条，保留 ${kept}，丢弃 ${dropped}，抽取 ${entities} 个实体`);
 
   console.log('\n🌳 构建记忆树...');
   const treeResult = await buildTree(db);
@@ -228,8 +236,7 @@ program
     try {
       if (options.build) {
         console.log('🌳 清空旧树并重新构建...\n');
-        db.prepare('DELETE FROM tree_nodes').run();
-        const treeResult = await buildTree(db, { treeKind: 'global' });
+        const treeResult = await buildTree(db, { treeKind: 'global', forceRebuild: true });
         console.log(`✅ 构建完成: ${treeResult.nodesCreated} 个节点, ${treeResult.levels} 层\n`);
       }
 

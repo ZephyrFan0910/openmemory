@@ -31,18 +31,18 @@ export function estimateTokenCount(text) {
  * @param {Object} chunk
  * @returns {Object} 插入的 chunk（含 id）
  */
-export function insertChunk(db, { source, sourceId, title, content, score = 0.0, lifecycle = 'pending' }) {
+export function insertChunk(db, { source, sourceId, title, content, score = 0.0, lifecycle = 'pending', interactionTags = null, embedding = null }) {
   const id = generateChunkId(content, source, sourceId);
   const tokenCount = estimateTokenCount(content);
 
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO chunks (id, source, source_id, title, content, token_count, score, lifecycle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO chunks (id, source, source_id, title, content, token_count, score, lifecycle, interaction_tags, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  stmt.run(id, source, sourceId || null, title || null, content, tokenCount, score, lifecycle);
+  stmt.run(id, source, sourceId || null, title || null, content, tokenCount, score, lifecycle, interactionTags, embedding);
 
-  return { id, source, sourceId, title, content, tokenCount, score, lifecycle };
+  return { id, source, sourceId, title, content, tokenCount, score, lifecycle, interactionTags };
 }
 
 /**
@@ -53,8 +53,8 @@ export function insertChunk(db, { source, sourceId, title, content, score = 0.0,
  */
 export function insertChunks(db, chunks) {
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO chunks (id, source, source_id, title, content, token_count, score, lifecycle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO chunks (id, source, source_id, title, content, token_count, score, lifecycle, interaction_tags, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const results = [];
@@ -63,7 +63,7 @@ export function insertChunks(db, chunks) {
     for (const item of items) {
       const id = generateChunkId(item.content, item.source, item.sourceId);
       const tokenCount = estimateTokenCount(item.content);
-      insert.run(id, item.source, item.sourceId || null, item.title || null, item.content, tokenCount, item.score || 0.0, item.lifecycle || 'pending');
+      insert.run(id, item.source, item.sourceId || null, item.title || null, item.content, tokenCount, item.score || 0.0, item.lifecycle || 'pending', item.interactionTags || null, item.embedding || null);
       results.push({ id, ...item, tokenCount });
     }
   });

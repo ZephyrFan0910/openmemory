@@ -6,18 +6,22 @@
 /**
  * 插入一个实体
  * @param {import('better-sqlite3').Database} db
- * @param {Object} entity - { name, type, sourceChunkId }
+ * @param {Object} entity - { name, type, sourceChunkId, canonicalId }
  * @returns {Object} 插入的实体
  */
-export function insertEntity(db, { name, type, sourceChunkId = null }) {
+export function insertEntity(db, { name, type, sourceChunkId = null, canonicalId = null }) {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO entities (name, type, source_chunk_id)
-    VALUES (?, ?, ?)
+    INSERT OR IGNORE INTO entities (canonical_id, name, type, source_chunk_id)
+    VALUES (?, ?, ?, ?)
   `);
 
-  const result = stmt.run(name, type, sourceChunkId);
+  stmt.run(canonicalId, name, type, sourceChunkId);
 
-  // 获取插入的实体（可能是新插入的，也可能是已存在的）
+  // 获取插入的实体
+  if (canonicalId) {
+    return db.prepare('SELECT * FROM entities WHERE canonical_id = ? AND (source_chunk_id = ? OR (? IS NULL AND source_chunk_id IS NULL))')
+      .get(canonicalId, sourceChunkId, sourceChunkId);
+  }
   return db.prepare('SELECT * FROM entities WHERE name = ? AND type = ? AND (source_chunk_id = ? OR (? IS NULL AND source_chunk_id IS NULL))')
     .get(name, type, sourceChunkId, sourceChunkId);
 }
