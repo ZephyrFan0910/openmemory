@@ -143,17 +143,15 @@ export async function sealBuffer(db, treeId, level, treeKind = 'global') {
     }
   }
 
-  // 9. 写入 vault（带子节点链接 + 实体链接）
-  const childInfo = children.map(c => ({
-    id: c.id,
-    level: c.level || 0,
-    title: c.title || c.source || '',
-  }));
+  // 9. 写入 vault（summary 之间通过 frontmatter children: wikilinks 连接）
+  const childInfo = childNodeIds.map(cid => {
+    const childNode = getTreeNode(db, cid);
+    return { id: cid, level: childNode?.level || 0 };
+  });
 
   writeTreeNodeToVault(
     { id: nodeId, level: level + 1, content: summaryContent, score: maxScore, timeFrom, timeTo, treeKind },
     childInfo,
-    null, // parentId（L4 根节点没有父节点）
     dbEntities.map(e => ({ name: e.name, type: e.type, canonical_id: e.canonical_id })),
   );
 

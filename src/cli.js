@@ -417,7 +417,7 @@ program
 
       // --rebuild: 从数据库重建所有 vault 文件
       if (options.rebuild) {
-        const { writeTreeNodeToVault, writeChunkToVault, writeEntityToVault, writeIndexMOC } = await import('./store/content.js');
+        const { writeTreeNodeToVault, writeChunkToVault, writeEntityToVault, writeIndexMOC, writeGraphConfig } = await import('./store/content.js');
         const { getTreeNode, getChildNodes } = await import('./store/trees.js');
         const { getChunk } = await import('./store/chunks.js');
         const { getEntitiesForChunk, getTopEntities } = await import('./store/entities.js');
@@ -443,11 +443,10 @@ program
         for (const node of nodes) {
           const children = getChildNodes(db, node.id);
           const entities = getEntitiesForChunk(db, node.id);
-          const childInfo = children.map(c => ({ id: c.id, level: c.level, title: c.content?.slice(0, 50) || '' }));
+          const childInfo = children.map(c => ({ id: c.id, level: c.level }));
           writeTreeNodeToVault(
             { id: node.id, level: node.level, content: node.content, score: node.score, timeFrom: node.time_from, timeTo: node.time_to, treeKind: node.tree_kind },
             childInfo,
-            node.parent_id,
             entities.map(e => ({ name: e.name, type: e.type, canonical_id: e.canonical_id })),
           );
         }
@@ -465,9 +464,10 @@ program
         }
         console.log(`   写入 ${allEntities.length} 个实体页面`);
 
-        // 生成 Index
+        // 生成 Index + Graph 配置
         writeIndexMOC(db);
-        console.log('   生成 Index.md');
+        writeGraphConfig();
+        console.log('   生成 Index.md + graph.json');
 
         console.log('✅ Vault 重建完成');
         return;

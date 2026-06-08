@@ -1,6 +1,10 @@
 /**
  * OpenMemory - 磁盘 .md 文件读写
- * 输出 Obsidian 兼容的 Markdown 文件，带 wikilinks 形成 Graph View
+ * 对齐 OpenHuman 的 Obsidian 输出策略：
+ * - summary 之间通过 frontmatter children: [[wikilink]] 连接
+ * - chunk 不加任何 wikilinks（不参与 Graph View）
+ * - 实体通过 tags 字段嵌入（tags 在 Graph View 中隐藏）
+ * - graph.json 配置颜色分组
  */
 
 import fs from 'fs';
@@ -10,14 +14,10 @@ const DEFAULT_VAULT_PATH = path.join(process.cwd(), 'data', 'vault');
 
 // ==================== 基础文件操作 ====================
 
-export function getVaultPath() {
-  return DEFAULT_VAULT_PATH;
-}
+export function getVaultPath() { return DEFAULT_VAULT_PATH; }
 
 function ensureDir(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
 
 export function writeVaultFile(relativePath, content) {
@@ -35,57 +35,50 @@ export function readVaultFile(relativePath) {
 
 export function deleteVaultFile(relativePath) {
   const fullPath = path.join(DEFAULT_VAULT_PATH, relativePath);
-  if (fs.existsSync(fullPath)) {
-    fs.unlinkSync(fullPath);
-    return true;
-  }
+  if (fs.existsSync(fullPath)) { fs.unlinkSync(fullPath); return true; }
   return false;
 }
 
 export function listVaultFiles(dirPath = '') {
   const fullPath = path.join(DEFAULT_VAULT_PATH, dirPath);
   if (!fs.existsSync(fullPath)) return [];
-
   const entries = fs.readdirSync(fullPath, { withFileTypes: true });
   const files = [];
-
   for (const entry of entries) {
-    const relativePath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listVaultFiles(relativePath));
-    } else if (entry.name.endsWith('.md')) {
-      files.push(relativePath);
-    }
+    const rel = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) files.push(...listVaultFiles(rel));
+    else if (entry.name.endsWith('.md')) files.push(rel);
   }
-
   return files;
 }
 
-// ==================== Chunk 文件 ====================
+// ==================== Chunk 文件（无 wikilinks） ====================
 
 /**
- * 将 chunk 写入 vault（带实体 wikilinks）
- * @param {Object} chunk - chunk 数据
- * @param {Object[]} entities - 关联的实体列表 [{ name, type, canonical_id }]
+ * 将 chunk 写入 vault
+ * chunk 是叶子文件，不加 wikilinks，不参与 Graph View
  */
 export function writeChunkToVault(chunk, entities = []) {
-  const fileName = `chunks/${chunk.id}.md`;
+  const fileName = `chunks/${chunk.source}/${chunk.id}.md`;
   const date = chunk.created_at?.slice(0, 10) || '';
-  const source = chunk.source || '';
 
-  // 提取 tags（从实体和来源）
-  const tags = buildTags(entities, source);
+  // 构建 tags（Obsidian 层级标签）
+  const tags = [`source/${chunk.source}`];
+  for (const e of (entities || [])) {
+    if (e.type && e.name && e.type !== 'topic') {
+      tags.push(`${e.type}/${sanitizeTag(e.name)}`);
+    }
+  }
 
   const lines = [
     '---',
     `id: ${chunk.id}`,
-    `level: 0`,
-    `type: chunk`,
-    `source: ${source}`,
+    `source: ${chunk.source}`,
     chunk.source_id ? `source_id: "${chunk.source_id}"` : null,
     `score: ${chunk.score?.toFixed(2) || '0.00'}`,
     date ? `date: ${date}` : null,
-    tags.length > 0 ? 'tags:' : null,
+    `type: chunk`,
+    'tags:',
     ...tags.map(t => `  - ${t}`),
     '---',
     '',
@@ -94,136 +87,90 @@ export function writeChunkToVault(chunk, entities = []) {
     chunk.content || '',
   ].filter(Boolean);
 
-  // 实体链接
-  if (entities.length > 0) {
-    lines.push('', '## Entities');
-    for (const entity of entities) {
-      const link = entity.canonical_id || `${entity.type}:${entity.name}`;
-      lines.push(`- [[${link}]]`);
-    }
-  }
-
   return writeVaultFile(fileName, lines.join('\n'));
 }
 
-// ==================== Summary 节点文件 ====================
+// ==================== Summary 文件（frontmatter children: wikilinks） ====================
 
 /**
- * 将 summary 节点写入 vault（带父子 wikilinks + 实体链接）
+ * 将 summary 节点写入 vault
+ * 对齐 OpenHuman：wikilinks 在 frontmatter children: 字段中
+ *
  * @param {Object} node - { id, level, content, score, timeFrom, timeTo, treeKind }
- * @param {Object[]} children - 子节点列表 [{ id, level, title, chunkId }]
- * @param {string|null} parentId - 父节点 ID
+ * @param {Object[]} children - 子节点 [{ id, level }]
  * @param {Object[]} entities - 关联实体
  */
-export function writeTreeNodeToVault(node, children = [], parentId = null, entities = []) {
-  const fileName = node.level === 0
-    ? `chunks/${node.chunkId || node.id}.md`
-    : `summaries/L${node.level}/${node.id}.md`;
+export function writeTreeNodeToVault(node, children = [], entities = []) {
+  const fileName = `summaries/L${node.level}/${node.id}.md`;
 
-  const content = generateNodeMarkdown(node, children, parentId, entities);
-  return writeVaultFile(fileName, content);
-}
+  // 构建 tags
+  const tags = ['summary'];
+  for (const e of (entities || [])) {
+    if (e.type && e.name) {
+      tags.push(`${e.type}/${sanitizeTag(e.name)}`);
+    }
+  }
 
-/**
- * 生成节点的 Markdown 内容（带 wikilinks）
- */
-function generateNodeMarkdown(node, children = [], parentId = null, entities = []) {
   const lines = [];
 
-  // 提取 tags
-  const tags = buildTags(entities, null, node.level);
-
-  // YAML frontmatter
+  // YAML frontmatter（对齐 OpenHuman 格式）
   lines.push('---');
   lines.push(`id: ${node.id}`);
   lines.push(`level: ${node.level}`);
-  lines.push(`type: ${node.level === 0 ? 'chunk' : 'summary'}`);
+  lines.push(`type: summary`);
   if (node.treeKind) lines.push(`tree: ${node.treeKind}`);
   lines.push(`score: ${node.score?.toFixed(2) || 'N/A'}`);
   if (node.timeFrom) lines.push(`from: ${node.timeFrom}`);
   if (node.timeTo) lines.push(`to: ${node.timeTo}`);
-  if (parentId) lines.push(`parent: "[[${parentId}]]"`);
+
+  // children: wikilinks（核心：驱动 Graph View 的边）
+  if (children.length > 0) {
+    lines.push('children:');
+    for (const child of children) {
+      lines.push(`  - "[[${child.id}]]"`);
+    }
+  } else {
+    lines.push('children: []');
+  }
+
+  // tags（Graph View 中隐藏，但 Obsidian 标签面板可见）
   if (tags.length > 0) {
     lines.push('tags:');
     for (const t of tags) lines.push(`  - ${t}`);
   }
+
   lines.push('---');
   lines.push('');
 
   // 标题
-  if (node.level === 0) {
-    lines.push(`# ${node.title || '未命名 Chunk'}`);
-  } else {
-    lines.push(`# L${node.level} 摘要`);
-  }
+  lines.push(`# L${node.level} 摘要`);
   lines.push('');
 
   // 元信息
   const meta = [];
   if (node.timeFrom || node.timeTo) {
-    const timeStr = node.timeFrom && node.timeTo
+    const t = node.timeFrom && node.timeTo
       ? `${node.timeFrom.slice(0, 10)} ~ ${node.timeTo.slice(0, 10)}`
       : (node.timeFrom || node.timeTo || '').slice(0, 10);
-    meta.push(`📅 ${timeStr}`);
+    meta.push(`📅 ${t}`);
   }
-  if (node.score != null) {
-    meta.push(`⭐ ${node.score.toFixed(2)}`);
-  }
-  if (meta.length > 0) {
-    lines.push(meta.join(' | '));
-    lines.push('');
-  }
+  if (node.score != null) meta.push(`⭐ ${node.score.toFixed(2)}`);
+  if (meta.length > 0) { lines.push(meta.join(' | ')); lines.push(''); }
 
-  // 内容
-  if (node.content) {
-    lines.push(node.content);
-    lines.push('');
-  }
+  // 摘要内容
+  if (node.content) { lines.push(node.content); lines.push(''); }
 
-  // 子节点链接
-  if (children.length > 0) {
-    lines.push('## Children');
-    for (const child of children) {
-      const label = child.title || (child.level === 0 ? `chunk` : `L${child.level} 摘要`);
-      lines.push(`- [[${child.id}]] -- ${label}`);
-    }
-    lines.push('');
-  }
-
-  // 父节点链接
-  if (parentId) {
-    lines.push('## Parent');
-    lines.push(`[[${parentId}]]`);
-    lines.push('');
-  }
-
-  // 实体链接
-  if (entities.length > 0) {
-    lines.push('## Entities');
-    for (const entity of entities) {
-      const link = entity.canonical_id || `${entity.type}:${entity.name}`;
-      lines.push(`- [[${link}]]`);
-    }
-    lines.push('');
-  }
-
-  return lines.join('\n');
+  return writeVaultFile(fileName, lines.join('\n'));
 }
 
 // ==================== 实体页面 ====================
 
 /**
- * 写入实体页面（多个 chunk/summary 共享的实体枢纽）
- * @param {Object} entity - { canonical_id, name, type }
- * @param {Object[]} mentions - 引用该实体的节点 [{ id, level, title, date }]
+ * 写入实体页面
+ * 只为有意义的实体创建页面（过滤掉噪声 topic）
  */
 export function writeEntityToVault(entity, mentions = []) {
-  // 清理文件名：替换非法字符，截断过长名称
-  let safeName = entity.name.replace(/[\/\\:*?"<>|&=%#\s]+/g, '_').replace(/^_+|_+$/g, '');
-  if (safeName.length > 60) {
-    safeName = safeName.slice(0, 60);
-  }
-  if (!safeName) safeName = 'unknown';
+  const safeName = sanitizeFilename(entity.name);
   const fileName = `entities/${entity.type}/${safeName}.md`;
 
   const lines = [
@@ -242,36 +189,14 @@ export function writeEntityToVault(entity, mentions = []) {
     '',
   ];
 
-  // 按层级分组
-  const byLevel = { chunks: [], summaries: [] };
-  for (const m of mentions) {
-    if (m.level === 0) {
-      byLevel.chunks.push(m);
-    } else {
-      byLevel.summaries.push(m);
-    }
-  }
-
-  if (byLevel.chunks.length > 0) {
-    lines.push('## Chunks');
-    for (const m of byLevel.chunks.slice(0, 50)) {
+  if (mentions.length > 0) {
+    lines.push('## Mentions');
+    for (const m of mentions.slice(0, 30)) {
+      const label = m.level === 0 ? 'chunk' : `L${m.level}`;
       const date = m.date ? ` (${m.date.slice(0, 10)})` : '';
-      lines.push(`- [[${m.id}]]${date}`);
+      lines.push(`- [[${m.id}]] -- ${label}${date}`);
     }
-    if (byLevel.chunks.length > 50) {
-      lines.push(`- ... 共 ${byLevel.chunks.length} 条`);
-    }
-    lines.push('');
-  }
-
-  if (byLevel.summaries.length > 0) {
-    lines.push('## Summaries');
-    for (const m of byLevel.summaries.slice(0, 30)) {
-      lines.push(`- [[${m.id}]] -- L${m.level}`);
-    }
-    if (byLevel.summaries.length > 30) {
-      lines.push(`- ... 共 ${byLevel.summaries.length} 条`);
-    }
+    if (mentions.length > 30) lines.push(`- ... 共 ${mentions.length} 条`);
     lines.push('');
   }
 
@@ -280,10 +205,11 @@ export function writeEntityToVault(entity, mentions = []) {
 
 // ==================== Index MOC ====================
 
-/**
- * 生成 Index MOC（Map of Content）总览页
- */
 export function writeIndexMOC(db) {
+  const chunkCount = db.prepare('SELECT COUNT(*) as c FROM chunks').get().c;
+  const nodeCount = db.prepare('SELECT COUNT(*) as c FROM tree_nodes').get().c;
+  const entityCount = db.prepare('SELECT COUNT(*) as c FROM entities').get().c;
+
   const lines = [
     '---',
     'type: moc',
@@ -293,45 +219,29 @@ export function writeIndexMOC(db) {
     '',
     '# 🧠 OpenMemory',
     '',
-    '> 记忆树总览',
+    `> ${chunkCount} chunks · ${nodeCount} nodes · ${entityCount} entities`,
     '',
   ];
-
-  // 统计
-  const chunkCount = db.prepare('SELECT COUNT(*) as c FROM chunks').get().c;
-  const nodeCount = db.prepare('SELECT COUNT(*) as c FROM tree_nodes').get().c;
-  const entityCount = db.prepare('SELECT COUNT(*) as c FROM entities').get().c;
-
-  lines.push(`- Chunks: ${chunkCount}`);
-  lines.push(`- Tree Nodes: ${nodeCount}`);
-  lines.push(`- Entities: ${entityCount}`);
-  lines.push('');
 
   // 根节点
   const roots = db.prepare("SELECT * FROM tree_nodes WHERE parent_id IS NULL ORDER BY level DESC").all();
   if (roots.length > 0) {
     lines.push('## 根节点');
-    for (const root of roots) {
-      lines.push(`- [[${root.id}]] -- L${root.level}`);
-    }
+    for (const r of roots) lines.push(`- [[${r.id}]] -- L${r.level}`);
     lines.push('');
   }
 
-  // 热门实体
+  // 热门实体（过滤 topic 噪声）
   const topEntities = db.prepare(`
     SELECT canonical_id, name, type, COUNT(*) as cnt
-    FROM entities
-    WHERE canonical_id IS NOT NULL
-    GROUP BY canonical_id
-    ORDER BY cnt DESC
-    LIMIT 20
+    FROM entities WHERE canonical_id IS NOT NULL AND type != 'topic'
+    GROUP BY canonical_id ORDER BY cnt DESC LIMIT 20
   `).all();
 
   if (topEntities.length > 0) {
     lines.push('## 热门实体');
     for (const e of topEntities) {
-      const safeName = e.name.replace(/[\/\\:*?"<>|]/g, '_');
-      lines.push(`- [[${e.canonical_id}|${e.name}]] (${e.type}) ×${e.cnt}`);
+      lines.push(`- ${e.name} (${e.type}) ×${e.cnt}`);
     }
     lines.push('');
   }
@@ -339,24 +249,53 @@ export function writeIndexMOC(db) {
   return writeVaultFile('Index.md', lines.join('\n'));
 }
 
-// ==================== 工具函数 ====================
+// ==================== Obsidian 配置 ====================
 
 /**
- * 构建 tags 列表
+ * 生成 .obsidian/graph.json（颜色分组 + 隐藏 tags）
  */
-function buildTags(entities = [], source = null, level = null) {
-  const tags = new Set();
+export function writeGraphConfig() {
+  const config = {
+    "collapse-filter": false,
+    "search": "",
+    "showTags": false,
+    "showAttachments": false,
+    "hideUnresolved": true,
+    "showOrphans": true,
+    "collapse-color-groups": false,
+    "colorGroups": [
+      { "query": "path:summaries/L1", "color": { "rgb": 14701138, "a": 1 } },
+      { "query": "path:summaries/L2", "color": { "rgb": 14725458, "a": 1 } },
+      { "query": "path:summaries/L3", "color": { "rgb": 11657298, "a": 1 } },
+      { "query": "path:summaries/L4", "color": { "rgb": 5420768, "a": 1 } },
+      { "query": "path:summaries/L5", "color": { "rgb": 5431504, "a": 1 } },
+      { "query": "path:summaries/L6", "color": { "rgb": 14701261, "a": 1 } },
+      { "query": "path:entities", "color": { "rgb": 8454167, "a": 1 } },
+      { "query": "path:Index", "color": { "rgb": 16776960, "a": 1 } },
+    ],
+    "collapse-display": false,
+    "showArrow": true,
+    "textFadeMultiplier": -2,
+    "nodeSizeMultiplier": 1.16,
+    "lineSizeMultiplier": 1,
+    "collapse-forces": false,
+    "centerStrength": 0.5,
+    "repelStrength": 10,
+    "linkStrength": 1,
+    "linkDistance": 250,
+  };
 
-  if (level != null && level > 0) tags.add('summary');
+  return writeVaultFile('.obsidian/graph.json', JSON.stringify(config, null, 2));
+}
 
-  if (source) tags.add(`source/${source}`);
+// ==================== 工具函数 ====================
 
-  for (const entity of (entities || [])) {
-    if (entity.type && entity.name) {
-      // 用 type/name 作为层级 tag
-      tags.add(`${entity.type}/${entity.name}`);
-    }
-  }
+function sanitizeTag(name) {
+  return name.replace(/[\/\\:*?"<>|&=%#\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'unknown';
+}
 
-  return [...tags];
+function sanitizeFilename(name) {
+  let safe = name.replace(/[\/\\:*?"<>|&=%#\s]+/g, '_').replace(/^_+|_+$/g, '');
+  if (safe.length > 60) safe = safe.slice(0, 60);
+  return safe || 'unknown';
 }
