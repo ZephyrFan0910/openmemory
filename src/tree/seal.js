@@ -7,7 +7,7 @@
 
 import { getBuffer, clearBuffer, appendToBuffer } from '../store/buffers.js';
 import { insertTreeNode, linkChildren, generateNodeId, updateTreeMaxLevel } from '../store/trees.js';
-import { getChunk } from '../store/chunks.js';
+import { getChunk, estimateTokenCount } from '../store/chunks.js';
 import { getTreeNode } from '../store/trees.js';
 import { summarise } from './summarise.js';
 import { extractEntities } from '../extract/composite.js';
@@ -122,7 +122,7 @@ export async function sealBuffer(db, treeId, level, treeKind = 'global') {
     score: maxScore,
     timeFrom: timeFrom === '9999-12-31' ? null : timeFrom,
     timeTo: timeTo === '0000-01-01' ? null : timeTo,
-    tokenCount: summaryContent.length,
+    tokenCount: estimateTokenCount(summaryContent),
     embedding,
   });
 
@@ -173,16 +173,20 @@ export async function sealBuffer(db, treeId, level, treeKind = 'global') {
  */
 export async function sealAllPending(db, treeId, treeKind = 'global') {
   let sealed = 0;
+  let changed = true;
 
-  for (let level = 0; level < MAX_CASCADE_DEPTH; level++) {
-    const buf = getBuffer(db, treeId, level);
-    if (!buf || buf.item_ids.length === 0) break;
+  // 循环扫描所有层级，直到没有新的密封发生
+  while (changed) {
+    changed = false;
+    for (let level = 0; level < MAX_CASCADE_DEPTH; level++) {
+      const buf = getBuffer(db, treeId, level);
+      if (!buf || buf.item_ids.length === 0) continue;
 
-    if (shouldSeal(buf, level)) {
-      await sealBuffer(db, treeId, level, treeKind);
-      sealed++;
-    } else {
-      break; // 如果当前层不需要密封，上层也不会
+      if (shouldSeal(buf, level)) {
+        await sealBuffer(db, treeId, level, treeKind);
+        sealed++;
+        changed = true;
+      }
     }
   }
 

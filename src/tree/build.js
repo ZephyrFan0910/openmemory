@@ -62,6 +62,8 @@ export async function buildTree(db, options = {}) {
   if (forceRebuild) {
     db.prepare('DELETE FROM tree_nodes').run();
     deleteBuffersForTree(db, treeId);
+    // 重置 chunks lifecycle，让它们可以被重新处理
+    db.prepare("UPDATE chunks SET lifecycle = 'scored' WHERE lifecycle IN ('built','sealed')").run();
   }
 
   // 确保树存在

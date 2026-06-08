@@ -5,7 +5,7 @@
 
 import crypto from 'crypto';
 import { insertChunks, updateChunkScore, updateChunkLifecycle, estimateTokenCount } from '../store/chunks.js';
-import { insertEntities, indexEntityForChunk, getEntityByName } from '../store/entities.js';
+import { insertEntity, indexEntityForChunk } from '../store/entities.js';
 import { scoreChunk, DROP_THRESHOLD, DEFINITE_KEEP } from '../tree/score.js';
 import { extractEntities } from '../extract/composite.js';
 import { desensitizeText } from '../desensitize/index.js';

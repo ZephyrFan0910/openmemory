@@ -120,16 +120,45 @@ export function deleteChunk(db, id) {
 
 /**
  * 全文搜索 chunks
+ * FTS5 对中文支持不好，使用双策略：FTS + LIKE 兜底
  */
 export function searchChunks(db, query, { limit = 10 } = {}) {
-  return db.prepare(`
-    SELECT c.*, rank
-    FROM chunks_fts fts
-    JOIN chunks c ON c.rowid = fts.rowid
-    WHERE chunks_fts MATCH ?
-    ORDER BY rank
-    LIMIT ?
-  `).all(query, limit);
+  if (!query) return [];
+
+  // 检测是否包含中文
+  const hasChinese = /[一-鿿]/.test(query);
+
+  if (hasChinese) {
+    // 中文查询：用 LIKE 搜索（更可靠）
+    return db.prepare(`
+      SELECT *, 0 as rank
+      FROM chunks
+      WHERE content LIKE ? OR title LIKE ?
+      ORDER BY score DESC
+      LIMIT ?
+    `).all(`%${query}%`, `%${query}%`, limit);
+  }
+
+  // 英文查询：用 FTS5
+  try {
+    return db.prepare(`
+      SELECT c.*, rank
+      FROM chunks_fts fts
+      JOIN chunks c ON c.rowid = fts.rowid
+      WHERE chunks_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(query, limit);
+  } catch {
+    // FTS 失败时降级到 LIKE
+    return db.prepare(`
+      SELECT *, 0 as rank
+      FROM chunks
+      WHERE content LIKE ? OR title LIKE ?
+      ORDER BY score DESC
+      LIMIT ?
+    `).all(`%${query}%`, `%${query}%`, limit);
+  }
 }
 
 /**
