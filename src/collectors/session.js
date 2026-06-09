@@ -43,14 +43,20 @@ class SessionCollector extends Collector {
   }
 
   /**
-   * 扫描目录下的 sess_*.jsonl 文件
+   * 扫描目录下的会话文件
+   * 支持两种格式：
+   * - sess_*.jsonl（旧格式）
+   * - *.trajectory.jsonl（OpenClaw 格式）
    */
   scanSessionFiles(dirPath) {
     const entries = [];
 
     try {
       const files = fs.readdirSync(dirPath);
-      const sessionFiles = files.filter(f => f.startsWith('sess_') && f.endsWith('.jsonl'));
+      const sessionFiles = files.filter(f =>
+        (f.startsWith('sess_') && f.endsWith('.jsonl')) ||
+        f.endsWith('.trajectory.jsonl')
+      );
 
       for (const file of sessionFiles) {
         const filePath = path.join(dirPath, file);
@@ -69,13 +75,92 @@ class SessionCollector extends Collector {
   }
 
   /**
-   * 解析单个 session JSONL 文件
-   * 每行一个 JSON 对象，包含 role/content/timestamp/topic
+   * 解析单个会话文件
+   * 支持两种格式：
+   * - 旧格式：每行 { role, content, timestamp }
+   * - OpenClaw 格式：每行 { type: "prompt.submitted"|"model.completed", ts, data }
    */
   parseSessionFile(filePath) {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n').filter(line => line.trim());
 
+    // 检测是否为 OpenClaw 格式
+    const firstLine = lines[0] ? JSON.parse(lines[0]) : {};
+    const isOpenClaw = firstLine.traceSchema === 'openclaw-trajectory';
+
+    if (isOpenClaw) {
+      return this.parseOpenClawSession(filePath, lines);
+    }
+
+    return this.parseLegacySession(filePath, lines);
+  }
+
+  /**
+   * 解析 OpenClaw trajectory.jsonl 格式
+   */
+  parseOpenClawSession(filePath, lines) {
+    const messages = [];
+    let topic = null;
+    let sessionStartTime = null;
+
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+
+        // 用户消息
+        if (event.type === 'prompt.submitted') {
+          const prompt = event.data?.prompt || '';
+          if (!prompt) continue;
+
+          if (!sessionStartTime) sessionStartTime = event.ts;
+
+          // 提取主题（取第一行前 50 字符）
+          if (!topic) {
+            topic = prompt.split('\n')[0].slice(0, 50);
+          }
+
+          messages.push({
+            role: 'user',
+            content: prompt,
+            timestamp: event.ts,
+          });
+        }
+
+        // 助手回复
+        if (event.type === 'model.completed') {
+          const texts = event.data?.assistantTexts || [];
+          if (texts.length === 0) continue;
+
+          messages.push({
+            role: 'assistant',
+            content: texts.join('\n'),
+            timestamp: event.ts,
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (messages.length === 0) return [];
+
+    // 按时间窗口分组（30 分钟无消息 = 新会话）
+    const sessions = this.groupByTimeWindow(messages, 30 * 60 * 1000);
+
+    return sessions.map((session, idx) => ({
+      messages: session,
+      topic: topic || path.basename(filePath, '.trajectory.jsonl'),
+      startTime: session[0].timestamp,
+      endTime: session[session.length - 1].timestamp,
+      filePath,
+      sessionIndex: idx,
+    }));
+  }
+
+  /**
+   * 解析旧格式 sess_*.jsonl
+   */
+  parseLegacySession(filePath, lines) {
     const messages = [];
     let currentTopic = null;
     let sessionStartTime = null;
