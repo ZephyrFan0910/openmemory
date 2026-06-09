@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { initSchema, migrateSchema } from './schema.js';
 
-const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'memory.db');
+const DEFAULT_DB_PATH = process.env.OPENMEMORY_DB || path.join(process.cwd(), 'data', 'memory.db');
 
 let _db = null;
 

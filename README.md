@@ -219,6 +219,14 @@ export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_MODEL=gpt-4o-mini
 ```
 
+## 数据库路径
+
+默认在项目根目录的 `data/memory.db`。可通过环境变量自定义：
+
+```bash
+export OPENMEMORY_DB=/path/to/custom/memory.db
+```
+
 ## 向量嵌入
 
 设置环境变量启用语义搜索和重排：
